@@ -1,0 +1,97 @@
+// =============================================================================
+// httpbin.kdl - Universal HTTP REST Testing & Debugging MCP Server
+// Compiled with mcp-builder / mcp-gen (KDL 2.0)
+//
+// How to test:
+// 1. Compile and run this MCP server (uses public https://httpbin.org or local mock):
+//    mcp-builder build examples/httpbin.kdl -o httpbin_mcp.exe
+// =============================================================================
+
+server name="httpbin-tester" version="1.0.0" {
+    description "Comprehensive HTTP REST API testing and diagnostic suite powered by httpbin"
+    author "Network API Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+transports {
+    stdio enabled=#true
+}
+
+env {
+    HTTPBIN_BASE_URL default="https://httpbin.org" description="Base URL of httpbin service"
+    API_KEY default="mock-secret-key-12345" description="Bearer token for authenticated endpoints"
+}
+
+// -----------------------------------------------------------------------------
+// 1. HTTP GET with Query Parameters & JSON Extraction
+// -----------------------------------------------------------------------------
+tool "http_get_ip" description="Fetches public IP address observed by the remote HTTP server" {
+    bind:http method="GET" url="{env:HTTPBIN_BASE_URL}/ip" {
+        timeout-ms 8000
+        extract-json "/origin"
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. HTTP POST with JSON Body & Custom Authentication Header
+// -----------------------------------------------------------------------------
+tool "http_post_json" description="Sends a structured JSON payload with authorization headers and verifies echoes" {
+    (string)param "message" required=#true description="Message content to dispatch"
+    (string)param "tag" default="test" description="Category tag"
+
+    bind:http method="POST" url="{env:HTTPBIN_BASE_URL}/post" {
+        header "Content-Type" "application/json"
+        header "Authorization" "Bearer {env:API_KEY}"
+        body "{\"message\":\"{message}\",\"tag\":\"{tag}\",\"timestamp\":1700000000}"
+        timeout-ms 10000
+        extract-json "/json"
+    }
+
+    output {
+        format "json"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 3. HTTP GET with Dynamic Query String
+// -----------------------------------------------------------------------------
+tool "http_query_params" description="Sends dynamic query key-value pairs and inspects parsed arguments" {
+    (string)param "search_term" required=#true description="Search keyword"
+    (integer)param "limit" default=10 description="Result limit"
+
+    bind:http method="GET" url="{env:HTTPBIN_BASE_URL}/get" {
+        query "q" "{search_term}"
+        query "limit" "{limit}"
+        timeout-ms 8000
+        extract-json "/args"
+    }
+
+    output {
+        format "json"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 4. HTTP Headers Inspection with Filter Pipeline
+// -----------------------------------------------------------------------------
+tool "http_inspect_headers" description="Inspects request headers received by the server with output line filtering" {
+    (string)param "custom_header" default="MCP-Builder/1.0" description="Value for X-Client-Tag header"
+
+    bind:http method="GET" url="{env:HTTPBIN_BASE_URL}/headers" {
+        header "X-Client-Tag" "{custom_header}"
+        timeout-ms 8000
+    }
+
+    output {
+        format "json"
+        trim #true
+    }
+}

@@ -1,0 +1,549 @@
+# mcp-builder / mcp-gen: Complete LLM Reference & Agent Guide
+
+`mcp-builder` (CLI binaries: `mcp-builder` and `mcp-gen`) is an optimizing compiler that compiles declarative `mcp.kdl` IDL files into zero-dependency, single-binary Model Context Protocol (MCP) servers written in pure Rust (supporting Stdio and HTTP/SSE transports).
+
+---
+
+## 1. Quick Agent Recipe: How to Author and Compile an MCP Server
+
+When an agent needs to create a tool server or MCP wrapper for any CLI, API, socket, or OS capability, follow this standard workflow:
+
+```bash
+# 1. Author the declarative configuration file (e.g. mcp.kdl)
+# (Use the syntax and binding reference below)
+
+# 2. Verify syntax, schema types, placeholder scopes, and profile inheritance
+mcp-builder check mcp.kdl
+
+# 3. (Optional) Scaffold standalone Rust source project to inspect or modify
+mcp-builder emit mcp.kdl -o ./my-server-crate
+
+# 4. Compile directly into a standalone zero-overhead native static executable
+mcp-builder build mcp.kdl -o ./dist/my-server --release
+
+# 5. Run the server
+# Stdio mode (for Claude Desktop, OpenCode, Cursor):
+./dist/my-server --transport stdio
+
+# HTTP/SSE mode (for remote microservices / web clients):
+./dist/my-server --transport sse --host 0.0.0.0 --port 8000
+```
+
+---
+
+## 2. KDL 2.0 Syntax & Formatting Rules
+
+The compiler parses KDL 2.0 syntax. When generating `mcp.kdl`, adhere strictly to these rules:
+
+1. **Booleans & Nulls**: Use `#true`, `#false`, `#null` (or bare `true`, `false`, `null`).
+2. **Type Annotations**:
+   - Prefix form on node name: `(string)param "name" ...`
+   - Or property annotation: `param "name" type="string" ...`
+3. **Strings**:
+   - Standard: `"hello world\n"`
+   - Raw strings (ideal for JSON bodies, regex patterns, or scripts): `#"{"key": "value"}"#` or `##"..."##`
+   - Multiline strings: `"""line 1\nline 2"""` or `#"""line 1\nline 2"""#`
+4. **Comments**:
+   - Line comments: `// comment`
+   - Block comments: `/* comment */`
+   - Slashdash comments: `/-` comments out the subsequent node, argument, property, or child block.
+5. **Template Variable Interpolation & Parameter Modifiers**:
+   - `{param_name}`: Substituted at runtime with validated client parameter value as plain text.
+   - `{env:ENV_VAR}`: Substituted at runtime with host environment variable declared in `env { ... }`.
+   - **Modifiers**: Suffix with colon `:modifier` for safe escaping into JSON or URLs:
+     - `{param:json}` / `{env:VAR:json}`: Serializes the full value into standard, valid JSON (auto-quotes and escapes multiline strings, formats objects, arrays, booleans, numbers, and null). Use directly without quotes in JSON templates: `body #"{"code": {script:json}, "meta": {metadata:json}}"#`.
+     - `{param:url}` / `{env:VAR:url}`: Percent-encodes component according to RFC 3986 for URL query parameters or paths (`url="https://api.com/search?q={query:url}"`).
+   - Token interpolation applies to command strings, args, URLs, headers, query params, request bodies, workdirs, and prompt message bodies.
+
+---
+
+## 3. Document Structure Overview
+
+A complete `mcp.kdl` file comprises the following top-level blocks:
+
+```kdl
+// 1. Server Metadata (Required)
+server name="my-server" version="1.0.0" {
+    description "Production MCP Server"
+    author "Developer"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+// 2. Transport Endpoints (Optional, defaults to stdio enabled)
+transports {
+    stdio enabled=#true
+    sse enabled=#true {
+        host "127.0.0.1"
+        port 8080
+        endpoint "/sse"
+        message-endpoint "/message"
+        cors #true
+    }
+}
+
+// 3. Host Environment Contract (Isolated from LLM schemas)
+env {
+    (path)WORKSPACE_DIR default="." cli="--workspace" short="-w" description="Working directory"
+    (string)API_KEY required=#true cli="--api-key" description="Bearer auth token"
+    (u16)PORT default=8080 description="Internal service port"
+}
+
+// 4. Custom & Inherited Profiles (Optional)
+profile "custom-api" extends="rest-json" {
+    header "Authorization" "Bearer {env:API_KEY}"
+    header "X-Client" "mcp-builder"
+}
+
+// 5. Tools (LLM Capabilities)
+tool "search" description="Search query against database" {
+    (string)param "query" required=#true description="Search string"
+    (integer)param "limit" default=10 minimum=1 maximum=100 description="Max results"
+
+    output format="text" {
+        trim #true
+        head 50
+    }
+
+    bind:exec "search-cli" {
+        args "--query" "{query}" "--limit" "{limit}"
+        workdir "{env:WORKSPACE_DIR}"
+        timeout-ms 5000
+    }
+}
+
+// 6. Static & Dynamic Resources
+resource "docs://manual" name="User Manual" {
+    description "Embedded server documentation"
+    mime-type "text/markdown"
+    text """
+    # Server User Manual
+    Comprehensive guide to tools and endpoints.
+    """
+}
+
+resource-template "db://tables/{table}/schema" name="Table Schema" {
+    description "Extract dynamic table schema"
+    mime-type "application/json"
+    (string)param "table" required=#true description="Database table name"
+
+    bind:exec "db-cli" {
+        args "describe" "{table}" "--format" "json"
+    }
+}
+
+// 7. Prompts (Reusable conversation workflows)
+prompt "diagnose_error" description="Analyze error trace and recommend fix" {
+    argument "trace" required=#true description="Error traceback log"
+    argument "component" default="backend" description="Failing component"
+
+    message role="system" "You are a systems reliability expert analyzing {component} failures."
+    message role="user" "Analyze this failure trace:\n\n{trace}"
+}
+```
+
+---
+
+## 4. Node Specifications & Properties
+
+### 4.1 `server` (Root Declaration)
+- **Properties / Children**:
+  - `name="<str>"`: Machine-readable identifier for client registration.
+  - `version="<semver>"`: Semantic version string (e.g. `"1.0.0"`).
+  - `description="<str>"`: Human-readable summary.
+  - `author="<str>"`: Author or maintainer team.
+  - `license="<str>"`: Open source or proprietary license.
+  - `protocol-version="2024-11-05"`: MCP protocol revision (default: `"2024-11-05"`).
+  - `default-profile="<name>"`: Profile applied by default to all tools.
+
+### 4.2 `transports`
+- `stdio enabled=#true|#false` (default: `#true`)
+- `sse enabled=#true|#false` (default: `#false`):
+  - `host "<ip>"` (default: `"127.0.0.1"`)
+  - `port <u16>` (default: `8080`)
+  - `endpoint "<path>"` (default: `"/sse"`)
+  - `message-endpoint "<path>"` (default: `"/message"`)
+  - `cors #true|#false` (default: `#true`)
+
+### 4.3 `env` (Host Environment Variables Contract)
+Declares host environment variables required by bindings. **Variables declared here are completely isolated from LLM tool schemas**.
+- **Type Annotations**: `(string)`, `(path)`, `(integer)`, `(u16)`, `(boolean)`
+- **Properties**:
+  - `required=#true|#false`: If `#true`, server fails fast at boot if variable is missing.
+  - `default="<val>"`: Fallback value when not set in environment.
+  - `cli="--flag-name"`: Automatically adds a CLI runtime flag to override the env var.
+  - `short="-f"`: Short CLI option alias.
+  - `description="<desc>"`: Help documentation printed in `--help`.
+
+```kdl
+env {
+    (path)PROJECT_ROOT default="." cli="--project-root" short="-p" description="Root path"
+    (string)OPENAI_KEY required=#true cli="--api-key" description="API Secret Key"
+    (u16)PORT default=9000 cli="--port" description="Port"
+}
+```
+
+---
+
+## 5. Tools & Parameter Constraints
+
+### 5.1 Parameter (`param`) Types & Attributes
+Parameters define the input schema presented to LLMs (`tools/list`).
+
+| Type Annotation | Synonyms | Supported Constraints |
+| :--- | :--- | :--- |
+| `(string)param` | `string`, `str` | `required`, `default="val"`, `pattern="^regex$"`, `enum "a" "b"`, `description` |
+| `(integer)param` | `int`, `i32`, `i64` | `required`, `default=0`, `minimum=0` (`min`), `maximum=100` (`max`), `description` |
+| `(number)param` | `float`, `f64` | `required`, `default=0.0`, `minimum=0.0`, `maximum=1.0`, `description` |
+| `(boolean)param` | `bool` | `required`, `default=#true|#false`, `description` |
+| `(array)param` | `array:<type>` | `required`, `description` |
+| `(object)param` | `object`, `map` | `required`, `description` |
+
+### 5.2 Enum & Pattern Example
+```kdl
+tool "deploy" description="Trigger environment deployment" {
+    (string)param "target" default="staging" description="Deployment target" {
+        enum "dev" "staging" "production"
+    }
+    (string)param "version" required=#true pattern="^v[0-9]+\\.[0-9]+\\.[0-9]+$" description="Semver release tag"
+    (integer)param "replicas" default=3 minimum=1 maximum=50 description="Container replicas"
+}
+```
+
+---
+
+## 6. Declarative Output Transformation Pipelines
+
+The `output` block allows zero-overhead post-processing of binding outputs before returning content to LLMs.
+
+```kdl
+output format="text|image|json" mime-type="<mime>" {
+    trim #true                      // Strip leading/trailing whitespace
+    head 20                         // Keep only first N lines
+    tail 30                         // Keep only last N lines (mutually exclusive with head)
+    filter "ERROR"                  // Keep only lines containing substring
+    filter-not "DEBUG"              // Discard lines containing substring
+    regex "^([A-Z]+): (.*)$" {      // Match regex and format captured groups
+        template "Level: $1 | Message: $2"
+    }
+    extract-json "/result/data/id"  // RFC 6901 JSON pointer to extract inner field
+}
+```
+
+- `format="text"` (default): Wraps stdout/response into `[{"type": "text", "text": "..."}]`.
+- `format="image"`: Binary stdout or byte stream is automatically Base64-encoded as `[{"type": "image", "data": "<base64>", "mimeType": "<mime>"}]`.
+- `format="json"`: Parses output as structured JSON.
+
+---
+
+## 7. Execution Bindings Comprehensive Reference
+
+Every `tool` or `resource-template` specifies exactly one invocation binding.
+
+### 7.1 Subprocess Binding (`bind:exec` or `exec`) with Conditional OS Dispatch
+Executes an external executable via `std::process::Command` without shell injection risks.
+
+#### Basic Subprocess:
+```kdl
+bind:exec "git" {
+    args "status" "--short"
+    workdir "{env:PROJECT_ROOT}"
+    timeout-ms 5000
+    capture-stdout #true
+    capture-stderr #true
+    env {
+        GIT_TERMINAL_PROMPT "0"
+    }
+}
+```
+
+#### Cross-Platform Conditional OS Dispatch:
+Use `when:windows`, `when:linux`, `when:macos`, `when:unix`, or `fallback` child blocks (or `exec:windows`, `exec:unix`) to compile OS-specific commands without runtime penalty:
+
+```kdl
+tool "list_processes" description="List active OS processes" {
+    bind:exec {
+        when:windows "powershell" {
+            args "-NoProfile" "-Command" "Get-Process | Select-Object -First 20 Name, Id, CPU"
+        }
+        when:linux "ps" {
+            args "-eo" "pid,comm,%cpu" "--sort=-%cpu"
+        }
+        when:macos "ps" {
+            args "-eo" "pid,comm,%cpu" "-r"
+        }
+        fallback "ps" {
+            args "aux"
+        }
+    }
+}
+```
+
+---
+
+### 7.2 Outbound HTTP REST Binding (`bind:http` or `http`)
+Executes outbound synchronous REST calls with query, headers, and body interpolation.
+
+```kdl
+tool "github_issue" description="Fetch issue details from GitHub API" {
+    (string)param "owner" required=#true description="Repository owner"
+    (string)param "repo" required=#true description="Repository name"
+    (integer)param "issue_number" required=#true description="Issue ID"
+
+    bind:http method="GET" url="https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}" {
+        header "User-Agent" "mcp-builder-agent"
+        header "Authorization" "Bearer {env:GITHUB_TOKEN}"
+        header "Accept" "application/vnd.github.v3+json"
+        query "state" "all"
+        timeout-ms 8000
+        extract-json "/body" // Extract issue body directly
+    }
+}
+
+tool "post_data" description="Post JSON payload with escaped multiline script" {
+    (string)param "script" required=#true description="Multiline script code"
+    (object)param "metadata" description="Structured payload metadata"
+
+    bind:http method="POST" url="https://api.example.com/execute" {
+        header "Content-Type" "application/json"
+        // Use :json without surrounding quotes; automatically encodes strings/objects/arrays/numbers
+        body #"{"code": {script:json}, "meta": {metadata:json}}"#
+    }
+}
+```
+
+---
+
+### 7.3 Synchronous WebSocket Binding (`bind:ws` or `ws`)
+Establishes an RFC 6455 client handshake and sends masked text/binary frames (e.g. Chrome DevTools Protocol, OBS Studio WebSocket).
+
+```kdl
+tool "cdp_navigate" description="Navigate headless browser to URL" {
+    (string)param "url" required=#true description="Destination URL"
+
+    bind:ws url="ws://127.0.0.1:9222/devtools/page/TARGET_ID" {
+        message #"{"id": 1, "method": "Page.navigate", "params": {"url": {url:json}}}"#
+        timeout-ms 5000
+        extract-json "/result/frameId"
+    }
+}
+```
+
+---
+
+### 7.4 Raw TCP Stream Binding (`bind:pipe` or `pipe`)
+Communicates with raw TCP sockets or Unix stream daemons using configurable delimiter framing (`\n`, `\0`, or raw).
+
+```kdl
+tool "redis_ping" description="Send PING to Redis server" {
+    bind:pipe host="127.0.0.1" port="6379" {
+        framing "\r\n"
+        message "PING\r\n"
+        timeout-ms 2000
+    }
+}
+```
+
+---
+
+### 7.5 Native Windows COM Automation Binding (`bind:com` or `com`)
+Direct Win32 OLE `IDispatch` automation without external SDKs or DLL dependencies (Excel, Word, AutoCAD, WScript, Shell).
+
+```kdl
+tool "excel_cell_write" description="Write value into active Excel sheet" {
+    (string)param "cell" required=#true description="Cell reference e.g. A1"
+    (string)param "value" required=#true description="Cell value"
+
+    bind:com progid="Excel.Application" dispatch="ActiveSheet.Range.Value" {
+        args "{cell}" "{value}"
+        attach #true
+        bring-to-front #false
+        timeout-ms 10000
+    }
+}
+```
+
+---
+
+### 7.6 Local IPC Binding (`bind:ipc` or `ipc`)
+Dispatches to local filesystem IPC daemons or named socket directories.
+
+```kdl
+tool "daemon_action" description="Invoke local daemon RPC" {
+    (string)param "action" required=#true description="RPC action"
+
+    bind:ipc dir="/tmp/my-daemon" method="{action}" {
+        timeout-ms 3000
+    }
+}
+```
+
+---
+
+### 7.7 Native Rust Symbol Binding (`bind:native` or `native`)
+Dispatches directly to an in-process Rust function compiled into the binary.
+
+```kdl
+tool "fast_crypto_hash" description="Compute blake3 hash in-process" {
+    (string)param "data" required=#true description="Raw input"
+
+    bind:native symbol="compute_blake3_hash"
+}
+```
+
+---
+
+## 8. Profiles & Inheritance System
+
+Profiles enable reusable connection templates and protocol presets.
+
+### 8.1 Defining and Extending Profiles
+```kdl
+profile "base-api" {
+    method "POST"
+    header "Content-Type" "application/json"
+    header "User-Agent" "MCP-Server/1.0"
+    timeout-ms 5000
+}
+
+profile "authenticated-api" extends="base-api" {
+    header "Authorization" "Bearer {env:API_TOKEN}"
+}
+
+tool "query_api" profile="authenticated-api" {
+    bind:http url="https://api.example.com/v1/query" {
+        body "{\"query\": \"{q}\"}"
+    }
+}
+```
+
+### 8.2 Built-in Profiles Catalog
+`mcp-builder` includes ready-to-use built-in profiles:
+- `cdp-chrome`: Chrome DevTools Protocol WebSocket preset (`ws://127.0.0.1:9222/devtools/page/...`).
+- `obs-websocket`: OBS Studio WebSocket v5 protocol wrapper.
+- `ida-pro`: Hex-Rays IDA Pro MCP remote RPC bridge.
+- `redis-tcp`: Raw TCP stream Redis command framing.
+- `rest-json`: Standard JSON REST API defaults (`POST`, `application/json`).
+- `json-rpc-stdio` / `json-rpc-tcp`: JSON-RPC 2.0 wrapping presets.
+- `wscript`: Windows Scripting Host COM automation defaults.
+
+---
+
+## 9. Resources & Prompts
+
+### 9.1 Static & Dynamic Resources (`resource`)
+```kdl
+resource "config://schema" name="Config Schema" {
+    description "Static application JSON schema"
+    mime-type "application/json"
+    text "{\"type\": \"object\", \"properties\": {}}"
+}
+```
+
+### 9.2 Parameterized Resource Templates (`resource-template`)
+Uses RFC 6570 Level 1 URI templates (`{param}`) matched dynamically at runtime:
+
+```kdl
+resource-template "logs://services/{service_id}/recent" name="Recent Service Logs" {
+    description "Tail logs for a given service"
+    mime-type "text/plain"
+    (string)param "service_id" required=#true description="Systemd service unit"
+
+    bind:exec "journalctl" {
+        args "-u" "{service_id}" "-n" "50" "--no-pager"
+    }
+}
+```
+
+### 9.3 Reusable Prompts (`prompt`)
+```kdl
+prompt "code_review" description="Structured code review assistant" {
+    argument "diff" required=#true description="Git diff payload"
+    argument "focus" default="security" description="Review focus area"
+
+    message role="system" "You are a lead security engineer reviewing software patches."
+    message role="user" "Review this git diff focusing on {focus}:\n\n```\n{diff}\n```"
+}
+```
+
+---
+
+## 10. Complete Real-World Example Configurations
+
+### Example 1: System Admin & Observability Server (`mcp.kdl`)
+```kdl
+server name="system-admin" version="1.0.0" {
+    description "System management and monitoring MCP server"
+    author "Ops Team"
+    license "Apache-2.0"
+}
+
+transports {
+    stdio enabled=#true
+    sse enabled=#false
+}
+
+env {
+    (path)LOGS_DIR default="/var/log" description="Log directory path"
+}
+
+tool "check_disk" description="Check filesystem disk space usage" {
+    (string)param "mount_point" default="/" description="Mount point path"
+
+    output format="text" {
+        trim #true
+    }
+
+    bind:exec {
+        when:windows "powershell" {
+            args "-NoProfile" "-Command" "Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free"
+        }
+        fallback "df" {
+            args "-h" "{mount_point}"
+        }
+    }
+}
+
+tool "tail_log" description="Tail specific system log file" {
+    (string)param "filename" required=#true description="Log file name"
+    (integer)param "lines" default=50 minimum=1 maximum=500 description="Number of lines"
+
+    output format="text" {
+        trim #true
+        tail 50
+    }
+
+    bind:exec "tail" {
+        args "-n" "{lines}" "{env:LOGS_DIR}/{filename}"
+        timeout-ms 3000
+    }
+}
+
+resource "system://info" name="System Host Information" {
+    description "Basic host kernel and architecture"
+    mime-type "text/plain"
+    text "mcp-builder zero-overhead native runtime"
+}
+```
+
+### Example 2: Chrome DevTools Protocol (CDP) WebSocket Server
+```kdl
+server name="chrome-cdp" version="1.0.0" {
+    description "Automated browser control via Chrome DevTools Protocol"
+}
+
+env {
+    (u16)CDP_PORT default=9222 description="Remote debugging port"
+}
+
+tool "cdp_page_navigate" description="Navigate active browser page to URL" {
+    (string)param "target_id" required=#true description="Browser target ID"
+    (string)param "url" required=#true description="Destination URL"
+
+    bind:ws url="ws://127.0.0.1:{env:CDP_PORT}/devtools/page/{target_id}" {
+        message #"{"id": 1, "method": "Page.navigate", "params": {"url": "{url}"}}"#
+        timeout-ms 5000
+        extract-json "/result/frameId"
+    }
+}
+```

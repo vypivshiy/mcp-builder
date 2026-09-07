@@ -1,0 +1,75 @@
+// =============================================================================
+// windows_native_com.kdl - Built-in Windows 11 COM Automation MCP Server
+// No external software required (uses native Windows 11 COM components)
+// =============================================================================
+
+server name="windows-native-com" version="1.0.0" {
+    description "Native Windows 11 COM (Component Object Model) built-in tools"
+    author "Automation Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+transports {
+    stdio enabled=#true
+}
+
+// -----------------------------------------------------------------------------
+// 1. Windows Speech Synthesizer (SAPI.SpVoice) - Голосовой синтез речи
+// -----------------------------------------------------------------------------
+tool "speak_text" description="Speak text aloud using native Windows speech synthesizer (SAPI.SpVoice COM object)" {
+    (string)param "text" required=#true description="Text to pronounce aloud"
+
+    bind:com "SAPI.SpVoice" {
+        dispatch "Speak"
+        args "{text}"
+        timeout-ms 10000
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. Windows Script Host Shell (WScript.Shell) - Запуск системных приложений
+// -----------------------------------------------------------------------------
+tool "run_app" description="Launch a Windows application or command using WScript.Shell COM object (e.g. calc.exe, notepad.exe, mspaint.exe)" {
+    (string)param "program" required=#true description="Executable or command to run (e.g. notepad.exe, calc.exe, mspaint.exe)"
+
+    bind:com "WScript.Shell" {
+        dispatch "Run"
+        args "{program}"
+        timeout-ms 5000
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 3. Windows Shell Application (Shell.Application) - Управление проводником и окнами
+// -----------------------------------------------------------------------------
+tool "explore_folder" description="Open and highlight a directory in Windows File Explorer using Shell.Application COM" {
+    (string)param "folder_path" required=#true description="Folder path to explore in File Explorer (e.g. C:\\)"
+
+    bind:com "Shell.Application" {
+        dispatch "Explore"
+        args "{folder_path}"
+        timeout-ms 5000
+    }
+}
+
+tool "toggle_desktop" description="Minimize or restore all open desktop windows" {
+    bind:com "Shell.Application" {
+        dispatch "ToggleDesktop"
+        timeout-ms 3000
+    }
+}
+
+tool "minimize_all_windows" description="Minimize all active desktop windows to taskbar" {
+    bind:com "Shell.Application" {
+        dispatch "MinimizeAll"
+        timeout-ms 3000
+    }
+}
+
+tool "restore_all_windows" description="Restore all previously minimized desktop windows" {
+    bind:com "Shell.Application" {
+        dispatch "UndoMinimizeALL"
+        timeout-ms 3000
+    }
+}

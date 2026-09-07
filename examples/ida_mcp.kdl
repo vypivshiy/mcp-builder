@@ -1,0 +1,106 @@
+// =============================================================================
+// ida_mcp.kdl - Native IDA Pro MCP Bridge Definition
+// Compiled with mcp-builder / mcp-gen (KDL 2.0)
+// =============================================================================
+
+server name="ida-mcp-poc" version="0.1.0" {
+    description "Native high-performance IDA Pro MCP Bridge compiled with mcp-builder"
+    author "Reverse Engineering Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+transports {
+    stdio enabled=#true
+    sse enabled=#true {
+        host "127.0.0.1"
+        port 8088
+        endpoint "/sse"
+        message-endpoint "/message"
+        cors #true
+    }
+}
+
+env {
+    IDA_HOST default="127.0.0.1" description="Host of IDA Pro MCP plugin"
+    IDA_PORT default="13337" description="Port of IDA Pro MCP plugin"
+}
+
+// -----------------------------------------------------------------------------
+// 1. Connection & Metadata
+// -----------------------------------------------------------------------------
+tool "idax_check_connection" description="Check if the IDA plugin is running and get active binary metadata" {
+    bind:http method="POST" url="http://{env:IDA_HOST}:{env:IDA_PORT}/mcp" {
+        header "Content-Type" "application/json"
+        body "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_metadata\",\"params\":[]}"
+        timeout-ms 5000
+        extract-json "/result"
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. Cursor Position / Active Address
+// -----------------------------------------------------------------------------
+tool "idax_get_current_address" description="Get the address currently selected in IDA UI" {
+    bind:http method="POST" url="http://{env:IDA_HOST}:{env:IDA_PORT}/mcp" {
+        header "Content-Type" "application/json"
+        body "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_current_address\",\"params\":[]}"
+        timeout-ms 3000
+        extract-json "/result"
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 3. Paginated Functions List
+// -----------------------------------------------------------------------------
+tool "idax_list_functions" description="List functions in the database (paginated)" {
+    (integer)param "offset" default=0 description="Offset to start listing from (start at 0)"
+    (integer)param "count" default=20 description="Number of functions to list"
+
+    bind:http method="POST" url="http://{env:IDA_HOST}:{env:IDA_PORT}/mcp" {
+        header "Content-Type" "application/json"
+        body "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"list_functions\",\"params\":[ {offset}, {count} ]}"
+        timeout-ms 10000
+        extract-json "/result"
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 4. Decompile Function to C Pseudocode
+// -----------------------------------------------------------------------------
+tool "idax_decompile_function" description="Decompile a function at the given address" {
+    (string)param "address" required=#true description="Address of the function to decompile (e.g. 0x180058bed)"
+
+    bind:http method="POST" url="http://{env:IDA_HOST}:{env:IDA_PORT}/mcp" {
+        header "Content-Type" "application/json"
+        body "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"decompile_function\",\"params\":[\"{address}\"]}"
+        timeout-ms 15000
+        extract-json "/result"
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 5. Disassemble Function
+// -----------------------------------------------------------------------------
+tool "idax_disassemble_function" description="Get assembly listing for a function" {
+    (string)param "start_address" required=#true description="Address of the function to disassemble"
+
+    bind:http method="POST" url="http://{env:IDA_HOST}:{env:IDA_PORT}/mcp" {
+        header "Content-Type" "application/json"
+        body "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"disassemble_function\",\"params\":[\"{start_address}\"]}"
+        timeout-ms 10000
+        extract-json "/result"
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 6. Entry Points
+// -----------------------------------------------------------------------------
+tool "idax_get_entry_points" description="Get all entry points in the IDA database" {
+    bind:http method="POST" url="http://{env:IDA_HOST}:{env:IDA_PORT}/mcp" {
+        header "Content-Type" "application/json"
+        body "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_entry_points\",\"params\":[]}"
+        timeout-ms 5000
+        extract-json "/result"
+    }
+}

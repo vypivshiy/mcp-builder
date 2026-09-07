@@ -1,0 +1,59 @@
+// =============================================================================
+// network_bindings.kdl - Declarative WebSocket and Raw TCP MCP Bridge
+// Compiled with mcp-builder / mcp-gen (KDL 2.0)
+// =============================================================================
+
+server name="network-bridge" version="1.0.0" {
+    description "Zero-overhead WebSocket (bind:ws) and Raw TCP (bind:pipe) daemon bridge"
+    author "Infrastructure Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+transports {
+    stdio enabled=#true
+}
+
+env {
+    CHROME_DEBUG_HOST default="127.0.0.1" description="Chrome DevTools host"
+    CHROME_DEBUG_PORT default="9222" description="Chrome DevTools port"
+    REDIS_HOST default="127.0.0.1" description="Redis host"
+    REDIS_PORT default="6379" description="Redis port"
+}
+
+// -----------------------------------------------------------------------------
+// 1. WebSocket Binding (bind:ws) - Chrome DevTools Protocol Evaluation
+// -----------------------------------------------------------------------------
+tool "chrome_eval" description="Evaluate JavaScript in Chrome DevTools over WebSocket" {
+    (string)param "target_id" required=#true description="DevTools Target/Page ID"
+    (string)param "expression" required=#true description="JavaScript expression to evaluate"
+
+    bind:ws url="ws://{env:CHROME_DEBUG_HOST}:{env:CHROME_DEBUG_PORT}/devtools/page/{target_id}" {
+        message "{\"id\":1,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"{expression}\",\"returnByValue\":true}}"
+        timeout-ms 5000
+        extract-json "/result/result/value"
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. Raw TCP Stream Binding (bind:pipe) - Redis Ping & Command
+// -----------------------------------------------------------------------------
+tool "redis_command" description="Send raw command to Redis server over TCP" {
+    (string)param "command" default="PING" description="Redis command line"
+
+    bind:pipe host="{env:REDIS_HOST}" port="{env:REDIS_PORT}" {
+        message "{command}\r\n"
+        framing "\r\n"
+        timeout-ms 3000
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}

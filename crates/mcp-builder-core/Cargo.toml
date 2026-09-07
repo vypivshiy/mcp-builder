@@ -1,0 +1,16 @@
+[package]
+name = "mcp-builder-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+kdl.workspace = true
+minijinja.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]

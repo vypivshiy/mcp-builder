@@ -1,0 +1,112 @@
+// =============================================================================
+// mcp.example.kdl - Declarative MCP Server Definition
+// Compatible with mcp-builder / mcp-gen (KDL 2.0)
+// =============================================================================
+
+server name="developer-toolbox" version="1.0.0" {
+    description "Comprehensive developer tools and external REST API integrations"
+    author "DevOps Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+// -----------------------------------------------------------------------------
+// Transports Configuration (Stdio + HTTP/SSE)
+// -----------------------------------------------------------------------------
+transports {
+    stdio enabled=#true
+    sse enabled=#true {
+        host "0.0.0.0"
+        port 8000
+        endpoint "/sse"
+        message-endpoint "/message"
+        cors #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Host Environment Variables (Isolated from LLM schemas)
+// -----------------------------------------------------------------------------
+env {
+    API_KEY required=#false description="Optional API key for external services"
+    WORKSPACE_DIR default="." description="Base workspace directory"
+}
+
+// -----------------------------------------------------------------------------
+// Tool 1: OS Process Execution (bind:exec)
+// -----------------------------------------------------------------------------
+tool "git_log" description="Extracts formatted git commit history from a repository" {
+    (string)param "repo_path" required=#true description="Filesystem path to git repository"
+    (integer)param "max_count" default=5 minimum=1 maximum=50 description="Maximum commits to return"
+
+    bind:exec "git" {
+        workdir "{repo_path}"
+        args "-C" "{repo_path}" "log" "-n" "{max_count}" "--oneline"
+        timeout-ms 5000
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tool 2: Outbound HTTP GET REST API (bind:http)
+// -----------------------------------------------------------------------------
+tool "get_weather_forecast" description="Fetches current weather and forecast for coordinates" {
+    (number)param "latitude" required=#true minimum=-90.0 maximum=90.0 description="Latitude coordinate"
+    (number)param "longitude" required=#true minimum=-180.0 maximum=180.0 description="Longitude coordinate"
+    (string)param "hourly" default="temperature_2m,relative_humidity_2m" description="Comma-separated hourly metrics"
+
+    bind:http method="GET" url="https://api.open-meteo.com/v1/forecast" {
+        query "latitude" "{latitude}"
+        query "longitude" "{longitude}"
+        query "hourly" "{hourly}"
+        timeout-ms 5000
+    }
+}
+
+tool "calc" description="Simple calculator evaluating basic arithmetic" {
+    (number)param "a" required=#true description="First operand"
+    (number)param "b" required=#true description="Second operand"
+    (string)param "o" required=#true description="Arithmetic operator" {
+        enum "+" "-" "*" "/" "%"
+    }
+
+    bind:exec "python" {
+        args "-c" "print({a} {o} {b})"
+        timeout-ms 2000
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tool 3: Outbound HTTP POST with JSON payload & Header Auth (bind:http)
+// -----------------------------------------------------------------------------
+tool "send_notification" description="Dispatches a message payload to a webhook endpoint" {
+    param "endpoint_url" type="string" required=#true pattern="^https?://.+" description="Target webhook URL"
+    param "message" type="string" required=#true description="Notification message text"
+    param "severity" type="string" default="info" description="Notification severity level"
+
+    bind:http method="POST" url="{endpoint_url}" {
+        header "Content-Type" "application/json"
+        header "Authorization" "Bearer {env:API_KEY}"
+        body "{\"message\": \"{message}\", \"severity\": \"{severity}\"}"
+        timeout-ms 8000
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Static and Dynamic Resources
+// -----------------------------------------------------------------------------
+resource "system://manifest" name="Server Manifest" {
+    description "Runtime manifest and capability configuration"
+    mime-type "application/json"
+    text "{\"status\": \"healthy\", \"environment\": \"production\"}"
+}
+
+// -----------------------------------------------------------------------------
+// Prompt Templates
+// -----------------------------------------------------------------------------
+prompt "review_patch" description="Generates a structured prompt for reviewing code changes" {
+    argument "diff" required=#true description="Unified git diff to inspect"
+    argument "focus" default="security" description="Review focus: security, performance, or style"
+    
+    message role="system" "You are an expert code reviewer specializing in {focus}."
+    message role="user" "Please review the following git patch:\n\n{diff}"
+}

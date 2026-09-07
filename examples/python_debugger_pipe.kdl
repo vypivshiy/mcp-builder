@@ -1,0 +1,83 @@
+// =============================================================================
+// python_debugger_pipe.kdl - Remote Debugger & Evaluator over Raw TCP Socket
+// Compiled with mcp-builder / mcp-gen (KDL 2.0)
+//
+// How to test on Windows:
+// 1. Start a simple TCP evaluator daemon in Python:
+//    python -c "import socket, json; s=socket.socket(); s.bind(('127.0.0.1', 9999)); s.listen(5); print('Debugger ready on 9999'); 
+//    while True: 
+//        c, _ = s.accept(); d = c.recv(4096).decode(); 
+//        req = json.loads(d.strip()); 
+//        res = {'status': 'ok', 'result': eval(req['code'])}; 
+//        c.sendall((json.dumps(res) + '\n').encode()); c.close()"
+// 2. Compile and run this MCP server:
+//    mcp-builder build examples/python_debugger_pipe.kdl -o debugger_mcp.exe
+// =============================================================================
+
+server name="python-debugger-bridge" version="1.0.0" {
+    description "Raw TCP stream bridge to remote Python debug server and evaluation runtime"
+    author "Debugging & Tooling Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+transports {
+    stdio enabled=#true
+}
+
+env {
+    DEBUG_HOST default="127.0.0.1" description="Debug socket host address"
+    DEBUG_PORT default="9999" description="Debug socket TCP port"
+}
+
+// -----------------------------------------------------------------------------
+// 1. Evaluate Python Expression via JSON Stream Framing
+// -----------------------------------------------------------------------------
+tool "dbg_eval" description="Evaluates a Python expression on the remote debugger daemon over Raw TCP" {
+    (string)param "code" required=#true description="Python expression to evaluate (e.g. '2 ** 16' or '__import__(\"sys\").version')"
+
+    bind:pipe host="{env:DEBUG_HOST}" port="{env:DEBUG_PORT}" {
+        message "{\"action\":\"eval\",\"code\":\"{code}\"}\n"
+        framing "\n"
+        timeout-ms 5000
+        extract-json "/result"
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. Ping Debugger Daemon Health
+// -----------------------------------------------------------------------------
+tool "dbg_ping" description="Sends a heartbeat ping to verify the debug daemon socket is alive" {
+    bind:pipe host="{env:DEBUG_HOST}" port="{env:DEBUG_PORT}" {
+        message "{\"action\":\"ping\"}\n"
+        framing "\n"
+        timeout-ms 3000
+    }
+
+    output {
+        format "json"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 3. Inspect System & Loaded Modules
+// -----------------------------------------------------------------------------
+tool "dbg_list_modules" description="Retrieves list of imported Python modules on the target process" {
+    bind:pipe host="{env:DEBUG_HOST}" port="{env:DEBUG_PORT}" {
+        message "{\"action\":\"eval\",\"code\":\"list(__import__('sys').modules.keys())[:20]\"}\n"
+        framing "\n"
+        timeout-ms 5000
+        extract-json "/result"
+    }
+
+    output {
+        format "json"
+        trim #true
+    }
+}

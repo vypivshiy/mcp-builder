@@ -1,0 +1,122 @@
+// =============================================================================
+// crossplatform_system_cli.kdl - Cross-Platform CLI Tools & Utilities
+// Compiled with mcp-builder / mcp-gen (KDL 2.0)
+//
+// How to test:
+// 1. Compile and run this MCP server:
+//    mcp-builder build examples/crossplatform_system_cli.kdl -o system_cli_mcp.exe
+// =============================================================================
+
+server name="system-cli-toolbox" version="1.0.0" {
+    description "Cross-platform CLI execution utilities for system diagnostics and fast evaluation"
+    author "Developer Platform Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+transports {
+    stdio enabled=#true
+}
+
+env {
+    DEFAULT_WORKDIR default="." description="Base working directory"
+}
+
+// -----------------------------------------------------------------------------
+// 1. Universal Python-Powered Calculator
+// (Python is ubiquitous on Windows, macOS, and Linux)
+// -----------------------------------------------------------------------------
+tool "eval_math" description="Evaluates complex arithmetic and math expressions safely via Python math module" {
+    (string)param "expression" required=#true description="Mathematical expression (e.g. 'math.sqrt(144) + 2**8' or '10 * (3 + 4)')"
+
+    bind:exec "python" {
+        args "-c" "import math; print(eval('{expression}'))"
+        timeout-ms 3000
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. System Hardware & Platform Inspector
+// -----------------------------------------------------------------------------
+tool "get_system_info" description="Retrieves OS architecture, CPU count, and Python platform details as formatted JSON" {
+    bind:exec "python" {
+        args "-c" "import platform, os, json; print(json.dumps({'system': platform.system(), 'release': platform.release(), 'architecture': platform.machine(), 'cpus': os.cpu_count(), 'python': platform.python_version()}))"
+        timeout-ms 3000
+    }
+
+    output {
+        format "json"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 3. Directory Listing with Output Slicing
+// -----------------------------------------------------------------------------
+tool "list_dir_files" description="Lists filenames in a directory (limited to top 20 entries via output slice)" {
+    (string)param "path" default="." description="Directory path to inspect"
+
+    bind:exec "python" {
+        workdir "{env:DEFAULT_WORKDIR}"
+        args "-c" "import os; [print(x) for x in sorted(os.listdir('{path}'))]"
+        timeout-ms 5000
+    }
+
+    output {
+        format "text"
+        slice lines=20 head=#true
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 4. Native OS Shell Command Execution (Zero-Overhead Conditional OS Dispatch)
+// -----------------------------------------------------------------------------
+tool "os_ping" description="Pings a remote host using native OS ping utility" {
+    (string)param "host" required=#true description="Target hostname or IP address"
+
+    bind:exec {
+        when:windows "ping" {
+            args "-n" "1" "{host}"
+            timeout-ms 5000
+        }
+        when:unix "ping" {
+            args "-c" "1" "{host}"
+            timeout-ms 5000
+        }
+        fallback "echo" {
+            args "Ping not supported on this host: {host}"
+        }
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}
+
+tool "os_directory_listing" description="Native OS directory lister using cmd dir on Windows or ls on Unix" {
+    (string)param "path" default="." description="Directory path to list"
+
+    exec:windows "cmd" {
+        args "/c" "dir" "{path}"
+        timeout-ms 5000
+    }
+    exec:unix "ls" {
+        args "-la" "{path}"
+        timeout-ms 5000
+    }
+    fallback "dir" {
+        args "{path}"
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}

@@ -1,0 +1,100 @@
+// =============================================================================
+// chrome_cdp.kdl - Chrome DevTools Protocol (CDP) WebSocket Bridge
+// Compiled with mcp-builder / mcp-gen (KDL 2.0)
+//
+// How to test:
+// 1. Launch Chrome/Chromium with remote debugging enabled:
+//    chrome.exe --remote-debugging-port=9222 --remote-allow-origins="*"
+// 2. Compile and run this MCP server:
+//    mcp-builder build examples/chrome_cdp.kdl -o chrome_mcp.exe
+// =============================================================================
+
+server name="chrome-devtools-bridge" version="1.0.0" {
+    description "Direct zero-latency Chrome DevTools Protocol WebSocket bridge for browser automation"
+    author "Browser Automation Team"
+    license "MIT"
+    protocol-version "2024-11-05"
+}
+
+transports {
+    stdio enabled=#true
+}
+
+env {
+    CDP_HOST default="127.0.0.1" description="Chrome DevTools host"
+    CDP_PORT default="9222" description="Chrome DevTools remote debugging port"
+}
+
+// -----------------------------------------------------------------------------
+// 1. Evaluate JavaScript Expression in Browser Target
+// -----------------------------------------------------------------------------
+tool "cdp_eval_js" description="Evaluates JavaScript expression in a Chrome page target and returns the result value" {
+    (string)param "target_id" required=#true description="DevTools Target ID or page path (e.g. 'page/XXXX' or target UUID)"
+    (string)param "expression" required=#true description="JavaScript code snippet to execute"
+
+    bind:ws url="ws://{env:CDP_HOST}:{env:CDP_PORT}/devtools/page/{target_id}" {
+        message "{\"id\":1001,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"{expression}\",\"returnByValue\":true,\"awaitPromise\":true}}"
+        timeout-ms 10000
+        extract-json "/result/result/value"
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. Navigate Page to URL
+// -----------------------------------------------------------------------------
+tool "cdp_navigate" description="Navigates the target browser tab to a specified URL" {
+    (string)param "target_id" required=#true description="DevTools Target ID"
+    (string)param "url" required=#true description="Destination URL (e.g. 'https://github.com')"
+
+    bind:ws url="ws://{env:CDP_HOST}:{env:CDP_PORT}/devtools/page/{target_id}" {
+        message "{\"id\":1002,\"method\":\"Page.navigate\",\"params\":{\"url\":\"{url}\"}}"
+        timeout-ms 15000
+        extract-json "/result/frameId"
+    }
+
+    output {
+        format "text"
+        trim #true
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 3. Capture Page Screenshot (Base64 Image output)
+// -----------------------------------------------------------------------------
+tool "cdp_capture_screenshot" description="Captures a viewport screenshot of the current page as a PNG image" {
+    (string)param "target_id" required=#true description="DevTools Target ID"
+    (string)param "format" default="png" description="Image format (png or jpeg)" {
+        enum "png" "jpeg"
+    }
+
+    bind:ws url="ws://{env:CDP_HOST}:{env:CDP_PORT}/devtools/page/{target_id}" {
+        message "{\"id\":1003,\"method\":\"Page.captureScreenshot\",\"params\":{\"format\":\"{format}\"}}"
+        timeout-ms 15000
+        extract-json "/result/data"
+    }
+
+    output {
+        format "image"
+        mime-type "image/png"
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 4. Get Browser Version & User Agent (Browser-level WebSocket)
+// -----------------------------------------------------------------------------
+tool "cdp_get_browser_version" description="Retrieves browser metadata and user agent from the main browser endpoint" {
+    bind:ws url="ws://{env:CDP_HOST}:{env:CDP_PORT}/devtools/browser" {
+        message "{\"id\":1004,\"method\":\"Browser.getVersion\",\"params\":{}}"
+        timeout-ms 5000
+    }
+
+    output {
+        format "json"
+        trim #true
+    }
+}
